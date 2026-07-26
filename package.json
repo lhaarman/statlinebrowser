@@ -1,8 +1,11 @@
 {
   "name": "statlinebrowser",
+  "publisher": "lhaarman",
   "displayName": "StatlineBrowser",
+  "repository": "https://github.com/lhaarman/statlinebrowser",
   "description": "Uses opendata API to provide table previews in VSC",
   "version": "0.0.1",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.125.0"
   },
