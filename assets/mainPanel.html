@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+    <style>
+        body { color: var(--vscode-foreground); font-family: var(--vscode-font-family); padding: 10px; }
+        .input-group { margin-bottom: 20px; }
+        input[type="text"] { width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); }
+        button { margin-top: 10px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 8px 12px; cursor: pointer; }
+        #data-view { margin-top: 20px; overflow-x: auto; }
+        #status { margin-top: 20px; overflow-x: auto; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid var(--vscode-panel-border); padding: 8px; text-align: left; }
+        
+        /* Checkbox filter container styles */
+        .filter-box {
+            background: var(--vscode-input-background);
+            border: 1px solid var(--vscode-input-border);
+            max-height: 150px;
+            overflow-y: auto;
+            padding: 5px;
+            margin-top: 5px;
+            border-radius: 2px;
+        }
+        .filter-option {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 0;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <h1>CBS Statline OData Browser</h1>
+    
+    <div class="input-group">
+        <label for="table-id">Enter Table ID:</label>
+        <input type="text" id="table-id" placeholder="e.g. 83583NED">
+        <button id="fetch-properties-btn">Fetch Table Properties</button>  <button id="fetch-table-btn">Fetch Table</button>
+    </div>
+    <div id="filter-container"></div>
+    <div id="data-view"></div>
+    <div id="status"></div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+
+        window.addEventListener("DOMContentLoaded", () => {
+            vscode.postMessage({ command: "DOMContentLoaded" });
+        });
+
+        document.getElementById('fetch-properties-btn').addEventListener('click', () => {
+            const tableId = document.getElementById('table-id').value;
+            if (tableId) {
+                document.getElementById('status').innerHTML = '<p>Fetching properties data...</p>';
+
+                vscode.postMessage({
+                    command: 'fetchOptions',
+                    tableId: tableId
+                });
+            }
+        });
+        
+        document.getElementById('fetch-table-btn').addEventListener('click', () => {
+            const tableId = document.getElementById('table-id').value;
+            if (tableId) {
+                document.getElementById('status').innerHTML = '<p>Fetching data...</p>';
+
+                const selectedFilters = {};
+
+                // Find all checked checkboxes inside our filter container
+                const checkedBoxes = document.querySelectorAll("#filter-container input[type='checkbox']:checked");
+
+                checkedBoxes.forEach(checkbox => {
+                    // We stored the filter name in a data attribute or extracted from name
+                    const filterName = checkbox.getAttribute("name").replace("filter-", ""); // or checkbox.name
+                    
+                    if (!selectedFilters[filterName]) {
+                        selectedFilters[filterName] = [];
+                    }
+                    
+                    selectedFilters[filterName].push(checkbox.value.split(':')[0]);
+                });
+
+                vscode.postMessage({
+                    command: 'fetchTable',
+                    tableId: tableId,
+                    selectedFilters: selectedFilters
+                });
+            }
+        });
+
+        // Whenever any checkbox is clicked/changed:
+        document.getElementById('filter-container').addEventListener('change', () => {
+            const selectedFilters = {};
+            const checkedBoxes = document.querySelectorAll('#filter-container input[type="checkbox"]:checked');
+
+            checkedBoxes.forEach(checkbox => {
+                const filterName = checkbox.getAttribute('name').replace('filter-', '');
+                if (!selectedFilters[filterName]) {
+                    selectedFilters[filterName] = [];
+                }
+                selectedFilters[filterName].push(checkbox.value);
+            });
+
+            // Send the updated selections to the extension immediately
+            vscode.postMessage({
+                command: 'saveSelectedFilters',
+                selectedFilters: selectedFilters
+            });
+        });
+
+        window.addEventListener('message', event => {
+            const message = event.data;
+            if (message.command === 'renderTable') {
+                document.getElementById('status').innerHTML = '';
+                document.getElementById('data-view').innerHTML = message.html;
+            } else if (message.command === "setTableId") {
+                document.getElementById("table-id").value = message.value;
+            } else if (message.command === "renderFilters") {
+                const container = document.getElementById('filter-container');
+                container.innerHTML = '<h3>Filters</h3>';
+                
+                // Create a wrapper for horizontal layout
+                const wrapper = document.createElement('div');
+                wrapper.style.display = 'flex';
+                wrapper.style.flexWrap = 'wrap';
+                wrapper.style.gap = '15px';
+
+                message.filters.forEach(filter => {
+                    const div = document.createElement('div');
+                    div.style.minWidth = '180px';
+                    div.style.flex = '1';
+
+                    const checkboxesHtml = filter.options.map(opt => `
+                        <label class="filter-option">
+                            <input type="checkbox" name="filter-${filter.name}" value="${opt}">
+                            <span>${opt}</span>
+                        </label>
+                    `).join('');
+
+                    div.innerHTML = `
+                        <label style="display:block; font-size: 0.85em; font-weight: bold; margin-bottom: 2px;">${filter.name}</label>
+                        <div class="filter-box">
+                            ${checkboxesHtml}
+                        </div>
+                    `;
+                    wrapper.appendChild(div);
+                });
+                
+                container.appendChild(wrapper);
+                document.getElementById('status').innerHTML = '';
+            } else if (message.command === "setSelectedFilters") {
+                const savedSelections = message.selectedFilters;
+                
+                // Loop through each filter name and its selected values
+                for (const [filterName, values] of Object.entries(savedSelections)) {
+                    values.forEach(val => {
+                        // Find the checkbox that matches this filter name and value, and check it
+                        const checkbox = document.querySelector(`input[name="filter-${filterName}"][value="${val}"]`);
+                        if (checkbox) {
+                            checkbox.checked = true;
+                        }
+                    });
+                }
+            }
+        });
+    </script>
+</body>
+</html>

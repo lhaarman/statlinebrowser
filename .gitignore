@@ -1,0 +1,20 @@
+# Node dependencies
+node_modules/
+
+# Build and compilation output
+out/
+dist/
+*.vsix
+
+# Extension host test workspace & temporary artifacts
+.vscode-test/
+*.log
+
+# Environment & local settings
+.env
+.env.local
+.vscode/*.valid
+
+# Package manager lockfile overrides (if you want to exclude specific OS artifacts)
+.DS_Store
+Thumbs.db
