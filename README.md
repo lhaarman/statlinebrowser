@@ -2,6 +2,8 @@
 ## Features
 Adds a UI for browsing CBS Statline Tables using the OData (v3) API. Did this as a project to learn how to make VSC Extensions.
 
+![](assets/screenshot.png)
+
 ## Requirements
 None
 
