@@ -70,25 +70,30 @@
                 document.getElementById('status').innerHTML = '<p>Fetching data...</p>';
 
                 const selectedFilters = {};
+                const selectedTopics = [];
 
                 // Find all checked checkboxes inside our filter container
                 const checkedBoxes = document.querySelectorAll("#filter-container input[type='checkbox']:checked");
 
                 checkedBoxes.forEach(checkbox => {
-                    // We stored the filter name in a data attribute or extracted from name
-                    const filterName = checkbox.getAttribute("name").replace("filter-", ""); // or checkbox.name
+                    const name = checkbox.getAttribute("name");
+                    const filterName = name.replace("filter-", "");
                     
-                    if (!selectedFilters[filterName]) {
-                        selectedFilters[filterName] = [];
+                    if (filterName === "Topics") {
+                        selectedTopics.push(checkbox.value.split(':')[0]);
+                    } else {
+                        if (!selectedFilters[filterName]) {
+                            selectedFilters[filterName] = [];
+                        }
+                        selectedFilters[filterName].push(checkbox.value.split(':')[0]);
                     }
-                    
-                    selectedFilters[filterName].push(checkbox.value.split(':')[0]);
                 });
 
                 vscode.postMessage({
                     command: 'fetchTable',
                     tableId: tableId,
-                    selectedFilters: selectedFilters
+                    selectedFilters: selectedFilters,
+                    selectedTopics: selectedTopics
                 });
             }
         });
@@ -96,20 +101,29 @@
         // Whenever any checkbox is clicked/changed:
         document.getElementById('filter-container').addEventListener('change', () => {
             const selectedFilters = {};
+            const selectedTopics = [];
             const checkedBoxes = document.querySelectorAll('#filter-container input[type="checkbox"]:checked');
 
             checkedBoxes.forEach(checkbox => {
-                const filterName = checkbox.getAttribute('name').replace('filter-', '');
-                if (!selectedFilters[filterName]) {
-                    selectedFilters[filterName] = [];
+                const name = checkbox.getAttribute('name');
+                const filterName = name.replace('filter-', '');
+                const value = checkbox.value;
+                
+                if (filterName === 'Topics') {
+                    selectedTopics.push(value);
+                } else {
+                    if (!selectedFilters[filterName]) {
+                        selectedFilters[filterName] = [];
+                    }
+                    selectedFilters[filterName].push(value);
                 }
-                selectedFilters[filterName].push(checkbox.value);
             });
 
             // Send the updated selections to the extension immediately
             vscode.postMessage({
                 command: 'saveSelectedFilters',
-                selectedFilters: selectedFilters
+                selectedFilters: selectedFilters,
+                selectedTopics: selectedTopics
             });
         });
 
@@ -154,18 +168,26 @@
                 container.appendChild(wrapper);
                 document.getElementById('status').innerHTML = '';
             } else if (message.command === "setSelectedFilters") {
-                const savedSelections = message.selectedFilters;
+                const savedSelections = message.selectedFilters || {};
+                const savedTopics = message.selectedTopics || [];
                 
-                // Loop through each filter name and its selected values
+                // Check saved dimensions
                 for (const [filterName, values] of Object.entries(savedSelections)) {
                     values.forEach(val => {
-                        // Find the checkbox that matches this filter name and value, and check it
                         const checkbox = document.querySelector(`input[name="filter-${filterName}"][value="${val}"]`);
                         if (checkbox) {
                             checkbox.checked = true;
                         }
                     });
                 }
+                
+                // Check saved topics
+                savedTopics.forEach(val => {
+                    const checkbox = document.querySelector(`input[name="filter-Topics"][value="${val}"]`);
+                    if (checkbox) {
+                        checkbox.checked = true;
+                    }
+                });
             }
         });
     </script>

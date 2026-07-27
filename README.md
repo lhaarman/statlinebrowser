@@ -13,5 +13,8 @@ None
 
 ## Release Notes
 
+### 0.0.2
+Added topic selection
+
 ### 0.0.1
 MVP

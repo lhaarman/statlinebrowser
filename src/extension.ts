@@ -56,12 +56,13 @@ export function activate(context: vscode.ExtensionContext) {
 								});
 							}
 							
-							// Inside case "DOMContentLoaded":
 							const savedSelectedFilters = context.workspaceState.get<Record<string, string[]>>("lastSelectedFilters");
-							if (savedSelectedFilters) {
+							const savedSelectedTopics = context.workspaceState.get<string[]>("lastSelectedTopics");
+							if (savedSelectedFilters || savedSelectedTopics) {
 								webviewView.webview.postMessage({
 									command: "setSelectedFilters",
-									selectedFilters: savedSelectedFilters
+									selectedFilters: savedSelectedFilters,
+									selectedTopics: savedSelectedTopics
 								});
 							}
 							return;
@@ -82,17 +83,26 @@ export function activate(context: vscode.ExtensionContext) {
 
 							const dimensions = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.Dimension");
 							const timeDimensions = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.TimeDimension");
+							const topics = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.Topic");
 							console.log(`Dimensions: ${dimensions}`);
 							console.log(`TimeDimensions: ${timeDimensions}`);
+							console.log(`Topics: ${topics}`);
 
 							const allDimensions = [...timeDimensions, ...dimensions];
 
-							const newFilters: Filter[] = await Promise.all(
+							const dimensionFilters: Filter[] = await Promise.all(
 								allDimensions.map(async (dimension) => ({
 									name: dimension.Key,
 									options: await getCBSTableDimensionOptions(message.tableId, dimension.Key)
 								}))
 							);
+
+							const topicFilter: Filter = {
+								name: "Topics",
+								options: topics.map((t: any) => `${t.Key}: ${t.Title}`)
+							};
+
+							const newFilters: Filter[] = [topicFilter, ...dimensionFilters];
 
 							await context.workspaceState.update("lastFilters", newFilters);
 
@@ -104,7 +114,8 @@ export function activate(context: vscode.ExtensionContext) {
 						case "fetchTable":
 							console.log(`Fetching Statline table with ID ${message.tableId}`);
 							console.log(`Filters: ${JSON.stringify(message.selectedFilters)}`);
-							const rows = await fetchCBSTableData(message.tableId, message.selectedFilters);
+							console.log(`Topics: ${JSON.stringify(message.selectedTopics)}`);
+							const rows = await fetchCBSTableData(message.tableId, message.selectedFilters, message.selectedTopics);
 							
 							if (rows && rows.length > 0) {
 								// Generate table headers from the keys of the first row object
@@ -133,6 +144,7 @@ export function activate(context: vscode.ExtensionContext) {
 						case "saveSelectedFilters":
 							console.log("Saving selected filters");
 							await context.workspaceState.update("lastSelectedFilters", message.selectedFilters);
+							await context.workspaceState.update("lastSelectedTopics", message.selectedTopics);
 							return;
 					}
 				});
@@ -197,31 +209,48 @@ async function getCBSTableDimensionOptions(tableId: string, key: string): Promis
     }
 }
 
-function buildODataFilter(selectedFilters: Record<string, string[]>): string {
+function buildODataQuery(selectedFilters: Record<string, string[]>, selectedTopics: string[], dimensionKeys: string[]): string {
+    const queryParts: string[] = [];
+
+    // Handle $select for topics, ensuring dimension keys are always included
+    if (selectedTopics && selectedTopics.length > 0) {
+        const selectFields = [...dimensionKeys, ...selectedTopics];
+        queryParts.push(`$select=${selectFields.join(",")}`);
+    }
+
     const filterClauses: string[] = [];
 
     for (const [dimensionKey, values] of Object.entries(selectedFilters)) {
         if (values && values.length > 0) {
             // Create an 'or' condition for options selected within the same dimension
             // e.g., (Geslacht eq 'A' or Geslacht eq 'B')
-            const innerClauses = values.map(val => `${dimensionKey} eq '${val.replace(' ', '')}'`).join(' or ');
+            const innerClauses = values.map(val => `${dimensionKey} eq '${val}'`).join(" or ");
             filterClauses.push(`(${innerClauses})`);
         }
     }
 
     // Join different dimensions with 'and'
-    return filterClauses.length > 0 ? `$filter=${filterClauses.join(' and ')}` : '';
+    if (filterClauses.length > 0) {
+        queryParts.push(`$filter=${filterClauses.join(" and ")}`);
+    }
+
+    return queryParts.length > 0 ? queryParts.join("&") : "";
 }
 
-async function fetchCBSTableData(tableId: string, selectedFilters: Record<string, string[]>) {
-	const filterQuery = buildODataFilter(selectedFilters);
+async function fetchCBSTableData(tableId: string, selectedFilters: Record<string, string[]>, selectedTopics: string[]) {
+	const dataProperties = await getCBSTableDataProperties(tableId);
+	const dimensionKeys = dataProperties ? dataProperties
+		.filter((p: any) => p["odata.type"] !== "Cbs.OData.Topic" && p["odata.type"] !== "Cbs.OData.TopicGroup")
+		.map((p: any) => p.Key) : [];
+
+	const queryString = buildODataQuery(selectedFilters, selectedTopics, dimensionKeys);
     
     // We create a helper to build the URL cleanly
     const buildUrl = (withTop: boolean) => {
         const params = [];
         if (withTop) params.push(`$top=100`);
-        if (filterQuery) params.push(filterQuery);
-        return `https://opendata.cbs.nl/ODataApi/OData/${tableId}/UntypedDataSet?${params.join('&')}`;
+        if (queryString) params.push(queryString);
+        return `https://opendata.cbs.nl/ODataApi/OData/${tableId}/UntypedDataSet?${params.join("&")}`;
     };
 
     // 1. Try fetching WITHOUT top=100 first (or with it, depending on your goal)
