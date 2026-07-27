@@ -4,10 +4,10 @@
   "displayName": "StatlineBrowser",
   "repository": "https://github.com/lhaarman/statlinebrowser",
   "description": "Uses opendata API to provide table previews in VSC",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.125.0"
+    "vscode": "^1.80.0"
   },
   "categories": [
     "Other"
@@ -32,7 +32,7 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.125.0",
+    "@types/vscode": "^1.80.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x",
     "typescript-eslint": "^8.61.1",
