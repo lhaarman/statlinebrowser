@@ -4,7 +4,7 @@
   "displayName": "StatlineBrowser",
   "repository": "https://github.com/lhaarman/statlinebrowser",
   "description": "Uses opendata API to provide table previews in VSC",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "license": "MIT",
   "engines": {
     "vscode": "^1.125.0"
@@ -16,26 +16,12 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-    ],
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "statlineBrowserActivityBar",
-          "title": "Statline Browser",
-          "icon": "assets/mainPanelIcon.svg"
-        }
-      ]
-    },
-    "views": {
-      "statlineBrowserActivityBar": [
-        {
-          "id": "mainPanel",
-          "name": "Main view panel of statlinebrowser",
-          "type": "webview",
-          "icon": "assets/mainPanelIcon.svg"
-        }
-      ]
-    }
+      {
+        "command": "statlinebrowser.openBrowser",
+        "title": "Open CBS Statline Browser",
+        "category": "Statline Browser"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

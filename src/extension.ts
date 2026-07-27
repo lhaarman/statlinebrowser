@@ -1,6 +1,4 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
-import { cpSync } from 'fs';
+// ... existing code ...
 import * as vscode from 'vscode';
 
 interface Filter {
@@ -16,144 +14,159 @@ interface DimensionOption {
 export function activate(context: vscode.ExtensionContext) {
 	console.log('Congratulations, your extension "statlinebrowser" is now active!');
 
-	const configuration =- vscode.workspace.getConfiguration("statlinebrowser");
+	let currentPanel: vscode.WebviewPanel | undefined = undefined;
 
 	context.subscriptions.push(
-		vscode.window.registerWebviewViewProvider("mainPanel", {
-            async resolveWebviewView(webviewView: vscode.WebviewView, resolveContext: vscode.WebviewViewResolveContext, token: vscode.CancellationToken) {
-				console.log("Resolve WebviewView called for main panel");
+		vscode.commands.registerCommand("statlinebrowser.openBrowser", async () => {
+			const columnToShowIn = vscode.window.activeTextEditor
+				? vscode.window.activeTextEditor.viewColumn
+				: vscode.ViewColumn.One;
 
-				webviewView.webview.options = {
-					"enableScripts": true
-				};
-
-				const mainPanelHTMLContent = await getHtmlContent(context, "mainPanel.html");
-
-				webviewView.webview.html = mainPanelHTMLContent;
-
-				// Message handler (for table fetching)
-				const messageHandler = webviewView.webview.onDidReceiveMessage(async (message) => {
-					switch(message.command) {
-						case "DOMContentLoaded":
-							console.log("DOM content loaded for main panel");
-							const lastTableId = context.workspaceState.get<string>("lastTableId");
-
-							if (lastTableId) {
-								webviewView.webview.postMessage({
-									command: "setTableId",
-									value: lastTableId
-								});
-
-							}
-
-							const filters = context.workspaceState.get<string>("lastFilters");
-
-							if (filters) {
-								console.log("Sending message!")
-								webviewView.webview.postMessage({
-									command: "renderFilters",
-									filters: filters
-								});
-							}
-							
-							const savedSelectedFilters = context.workspaceState.get<Record<string, string[]>>("lastSelectedFilters");
-							const savedSelectedTopics = context.workspaceState.get<string[]>("lastSelectedTopics");
-							if (savedSelectedFilters || savedSelectedTopics) {
-								webviewView.webview.postMessage({
-									command: "setSelectedFilters",
-									selectedFilters: savedSelectedFilters,
-									selectedTopics: savedSelectedTopics
-								});
-							}
-							return;
-						case "fetchOptions":
-							if (!message.tableId) {
-								console.log("Received Fetch Table without table id!");
-							}
-							
-							await context.workspaceState.update("lastTableId", message.tableId);
-							console.log(`TableID after setting workspace state: ${context.workspaceState.get<string>("lastTableId")}`);
-
-							console.log(`User wants to display table with ID: ${message.tableId}`);
-							console.log(`First fetching catalog data on table...`);
-
-							const dataProperties = await getCBSTableDataProperties(message.tableId);
-
-							console.log(`CBS Table info: ${dataProperties}`);
-
-							const dimensions = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.Dimension");
-							const timeDimensions = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.TimeDimension");
-							const topics = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.Topic");
-							console.log(`Dimensions: ${dimensions}`);
-							console.log(`TimeDimensions: ${timeDimensions}`);
-							console.log(`Topics: ${topics}`);
-
-							const allDimensions = [...timeDimensions, ...dimensions];
-
-							const dimensionFilters: Filter[] = await Promise.all(
-								allDimensions.map(async (dimension) => ({
-									name: dimension.Key,
-									options: await getCBSTableDimensionOptions(message.tableId, dimension.Key)
-								}))
-							);
-
-							const topicFilter: Filter = {
-								name: "Topics",
-								options: topics.map((t: any) => `${t.Key}: ${t.Title}`)
-							};
-
-							const newFilters: Filter[] = [topicFilter, ...dimensionFilters];
-
-							await context.workspaceState.update("lastFilters", newFilters);
-
-							webviewView.webview.postMessage({
-								command: "renderFilters",
-								filters: newFilters
-							});
-							return;
-						case "fetchTable":
-							console.log(`Fetching Statline table with ID ${message.tableId}`);
-							console.log(`Filters: ${JSON.stringify(message.selectedFilters)}`);
-							console.log(`Topics: ${JSON.stringify(message.selectedTopics)}`);
-							const rows = await fetchCBSTableData(message.tableId, message.selectedFilters, message.selectedTopics);
-							
-							if (rows && rows.length > 0) {
-								// Generate table headers from the keys of the first row object
-								const headers = Object.keys(rows[0]);
-								const headerHtml = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
-								
-								// Generate table rows
-								const rowHtml = rows.map((row: any) => 
-									`<tr>${headers.map(h => `<td>${row[h] !== undefined ? row[h] : ''}</td>`).join('')}</tr>`
-								).join('');
-
-								const tableHtml = `<table><thead>${headerHtml}</thead><tbody>${rowHtml}</tbody></table>`;
-
-								// Send back to webview
-								webviewView.webview.postMessage({
-									command: "renderTable",
-									html: tableHtml
-								});
-							} else {
-								webviewView.webview.postMessage({
-									command: "renderTable",
-									html: "<p>No data returned for the selected filters.</p>"
-								});
-							}
-							return;
-						case "saveSelectedFilters":
-							console.log("Saving selected filters");
-							await context.workspaceState.update("lastSelectedFilters", message.selectedFilters);
-							await context.workspaceState.update("lastSelectedTopics", message.selectedTopics);
-							return;
-					}
-				});
-
-				// Clean up the message listener when the view is disposed
-                webviewView.onDidDispose(() => {
-                    messageHandler.dispose();
-                }, null, context.subscriptions);
+			if (currentPanel) {
+				currentPanel.reveal(columnToShowIn);
+				return;
 			}
+
+			currentPanel = vscode.window.createWebviewPanel(
+				"statlineBrowser",
+				"CBS Statline Browser",
+				columnToShowIn || vscode.ViewColumn.One,
+				{
+					enableScripts: true,
+					retainContextWhenHidden: true
+				}
+			);
+
+			const mainPanelHTMLContent = await getHtmlContent(context, "mainPanel.html");
+			currentPanel.webview.html = mainPanelHTMLContent;
+
+			const messageHandler = currentPanel.webview.onDidReceiveMessage(async (message) => {
+				const webview = currentPanel?.webview;
+				if (!webview) return;
+
+				switch(message.command) {
+					case "DOMContentLoaded":
+						console.log("DOM content loaded for main panel");
+						const lastTableId = context.workspaceState.get<string>("lastTableId");
+
+						if (lastTableId) {
+							webview.postMessage({
+								command: "setTableId",
+								value: lastTableId
+							});
+						}
+
+						const filters = context.workspaceState.get<any>("lastFilters");
+
+						if (filters) {
+							console.log("Sending message!");
+							webview.postMessage({
+								command: "renderFilters",
+								filters: filters
+							});
+						}
+						
+						const savedSelectedFilters = context.workspaceState.get<Record<string, string[]>>("lastSelectedFilters");
+						const savedSelectedTopics = context.workspaceState.get<string[]>("lastSelectedTopics");
+						if (savedSelectedFilters || savedSelectedTopics) {
+							webview.postMessage({
+								command: "setSelectedFilters",
+								selectedFilters: savedSelectedFilters,
+								selectedTopics: savedSelectedTopics
+							});
+						}
+						return;
+					case "fetchOptions":
+						if (!message.tableId) {
+							console.log("Received Fetch Table without table id!");
+						}
+						
+						await context.workspaceState.update("lastTableId", message.tableId);
+						console.log(`TableID after setting workspace state: ${context.workspaceState.get<string>("lastTableId")}`);
+
+						console.log(`User wants to display table with ID: ${message.tableId}`);
+						console.log(`First fetching catalog data on table...`);
+
+						const dataProperties = await getCBSTableDataProperties(message.tableId);
+
+						console.log(`CBS Table info: ${dataProperties}`);
+
+						const dimensions = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.Dimension");
+						const timeDimensions = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.TimeDimension");
+						const topics = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.Topic");
+						console.log(`Dimensions: ${dimensions}`);
+						console.log(`TimeDimensions: ${timeDimensions}`);
+						console.log(`Topics: ${topics}`);
+
+						const allDimensions = [...timeDimensions, ...dimensions];
+
+						const dimensionFilters: Filter[] = await Promise.all(
+							allDimensions.map(async (dimension) => ({
+								name: dimension.Key,
+								options: await getCBSTableDimensionOptions(message.tableId, dimension.Key)
+							}))
+						);
+
+						const topicFilter: Filter = {
+							name: "Topics",
+							options: topics.map((t: any) => `${t.Key}: ${t.Title}`)
+						};
+
+						const newFilters: Filter[] = [topicFilter, ...dimensionFilters];
+
+						await context.workspaceState.update("lastFilters", newFilters);
+
+						webview.postMessage({
+							command: "renderFilters",
+							filters: newFilters
+						});
+						return;
+					case "fetchTable":
+						console.log(`Fetching Statline table with ID ${message.tableId}`);
+						console.log(`Filters: ${JSON.stringify(message.selectedFilters)}`);
+						console.log(`Topics: ${JSON.stringify(message.selectedTopics)}`);
+						const rows = await fetchCBSTableData(message.tableId, message.selectedFilters, message.selectedTopics);
+						
+						if (rows && rows.length > 0) {
+							// Generate table headers from the keys of the first row object
+							const headers = Object.keys(rows[0]);
+							const headerHtml = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
+							
+							// Generate table rows
+							const rowHtml = rows.map((row: any) => 
+								`<tr>${headers.map(h => `<td>${row[h] !== undefined ? row[h] : ''}</td>`).join('')}</tr>`
+							).join('');
+
+							const tableHtml = `<table><thead>${headerHtml}</thead><tbody>${rowHtml}</tbody></table>`;
+
+							// Send back to webview
+							webview.postMessage({
+								command: "renderTable",
+								html: tableHtml
+							});
+						} else {
+							webview.postMessage({
+								command: "renderTable",
+								html: "<p>No data returned for the selected filters.</p>"
+							});
+						}
+						return;
+					case "saveSelectedFilters":
+						console.log("Saving selected filters");
+						await context.workspaceState.update("lastSelectedFilters", message.selectedFilters);
+						await context.workspaceState.update("lastSelectedTopics", message.selectedTopics);
+						return;
+				}
+			});
+
+			currentPanel.onDidDispose(
+				() => {
+					messageHandler.dispose();
+					currentPanel = undefined;
+				},
+				null,
+				context.subscriptions
+			);
 		})
 	);
 };
