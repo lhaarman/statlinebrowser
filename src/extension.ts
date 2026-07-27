@@ -59,7 +59,6 @@ export function activate(context: vscode.ExtensionContext) {
 						const filters = context.workspaceState.get<any>("lastFilters");
 
 						if (filters) {
-							console.log("Sending message!");
 							webview.postMessage({
 								command: "renderFilters",
 								filters: filters
@@ -82,22 +81,15 @@ export function activate(context: vscode.ExtensionContext) {
 						}
 						
 						await context.workspaceState.update("lastTableId", message.tableId);
-						console.log(`TableID after setting workspace state: ${context.workspaceState.get<string>("lastTableId")}`);
 
 						console.log(`User wants to display table with ID: ${message.tableId}`);
 						console.log(`First fetching catalog data on table...`);
 
 						const dataProperties = await getCBSTableDataProperties(message.tableId);
-
-						console.log(`CBS Table info: ${dataProperties}`);
-
 						const dimensions = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.Dimension");
 						const timeDimensions = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.TimeDimension");
 						const topics = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.Topic");
-						console.log(`Dimensions: ${dimensions}`);
-						console.log(`TimeDimensions: ${timeDimensions}`);
-						console.log(`Topics: ${topics}`);
-
+						
 						const allDimensions = [...timeDimensions, ...dimensions];
 
 						const dimensionFilters: Filter[] = await Promise.all(
@@ -123,8 +115,6 @@ export function activate(context: vscode.ExtensionContext) {
 						return;
 					case "fetchTable":
 						console.log(`Fetching Statline table with ID ${message.tableId}`);
-						console.log(`Filters: ${JSON.stringify(message.selectedFilters)}`);
-						console.log(`Topics: ${JSON.stringify(message.selectedTopics)}`);
 						const rows = await fetchCBSTableData(message.tableId, message.selectedFilters, message.selectedTopics);
 						
 						if (rows && rows.length > 0) {
@@ -152,7 +142,6 @@ export function activate(context: vscode.ExtensionContext) {
 						}
 						return;
 					case "saveSelectedFilters":
-						console.log("Saving selected filters");
 						await context.workspaceState.update("lastSelectedFilters", message.selectedFilters);
 						await context.workspaceState.update("lastSelectedTopics", message.selectedTopics);
 						return;
