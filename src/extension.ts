@@ -37,7 +37,12 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			);
 
-			const mainPanelHTMLContent = await getHtmlContent(context, "mainPanel.html");
+			const nonce = getNonce();
+			let mainPanelHTMLContent = await getHtmlContent(context, "mainPanel.html");
+			
+			// Replace placeholder with nonce in HTML
+			mainPanelHTMLContent = mainPanelHTMLContent.replace(/{{nonce}}/g, nonce);
+			
 			currentPanel.webview.html = mainPanelHTMLContent;
 
 			const messageHandler = currentPanel.webview.onDidReceiveMessage(async (message) => {
@@ -87,10 +92,11 @@ export function activate(context: vscode.ExtensionContext) {
 
 						const dataProperties = await getCBSTableDataProperties(message.tableId);
 						const dimensions = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.Dimension");
+						const geoDimensions = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.GeoDimension");
 						const timeDimensions = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.TimeDimension");
 						const topics = dataProperties.filter((p: any) => p["odata.type"] === "Cbs.OData.Topic");
 						
-						const allDimensions = [...timeDimensions, ...dimensions];
+						const allDimensions = [...timeDimensions, ...geoDimensions,...dimensions];
 
 						const dimensionFilters: Filter[] = await Promise.all(
 							allDimensions.map(async (dimension) => ({
@@ -115,9 +121,22 @@ export function activate(context: vscode.ExtensionContext) {
 						return;
 					case "fetchTable":
 						console.log(`Fetching Statline table with ID ${message.tableId}`);
-						const rows = await fetchCBSTableData(message.tableId, message.selectedFilters, message.selectedTopics);
+						const fetchedTableData = await fetchCBSTableData(message.tableId, message.selectedFilters, message.selectedTopics);
 						
+						const rows = fetchedTableData[0];
+						const anyErrors = fetchedTableData[1];
 						if (rows && rows.length > 0) {
+							if (anyErrors) {
+								webview.postMessage({
+									command: "updateStatus",
+									status: "Had to retry fetch to truncate table, view does not show all rows according to filters."
+								});
+							} else {
+								webview.postMessage({
+									command: "updateStatus",
+									status: ""
+								});
+							}
 							// Generate table headers from the keys of the first row object
 							const headers = Object.keys(rows[0]);
 							const headerHtml = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
@@ -139,11 +158,24 @@ export function activate(context: vscode.ExtensionContext) {
 								command: "renderTable",
 								html: "<p>No data returned for the selected filters.</p>"
 							});
+
+							webview.postMessage({
+								command: "updateStatus",
+								status: "Possibly encountered error during fetching table"
+							});
 						}
 						return;
 					case "saveSelectedFilters":
 						await context.workspaceState.update("lastSelectedFilters", message.selectedFilters);
 						await context.workspaceState.update("lastSelectedTopics", message.selectedTopics);
+						return;
+					case "fetchCatalog":
+						console.log("Fetching CBS table catalog...");
+						const catalogTables = await getCBSTableCatalog();
+						webview.postMessage({
+							command: "renderCatalog",
+							tables: catalogTables
+						});
 						return;
 				}
 			});
@@ -160,6 +192,28 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 };
 
+async function getCBSTableCatalog() {
+    const url = "https://opendata.cbs.nl/ODataCatalog/Tables?$select=Identifier,Title,ShortDescription";
+    console.log(`Constructed catalog url: ${url}`);
+    try {
+        const response = await fetch(url, {
+            headers: {
+                "Accept": "application/json"
+            }
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json() as any;
+        if (data && data.value) {
+            return data.value;
+        }
+        return [];
+    } catch (e) {
+        console.error("Failed to fetch CBS table catalog", e);
+        return [];
+    }
+}
 
 async function getCBSTableDataProperties(tableId: string) {
     // Note: The TableInfos endpoint uses single quotes for the ID
@@ -239,7 +293,7 @@ function buildODataQuery(selectedFilters: Record<string, string[]>, selectedTopi
     return queryParts.length > 0 ? queryParts.join("&") : "";
 }
 
-async function fetchCBSTableData(tableId: string, selectedFilters: Record<string, string[]>, selectedTopics: string[]) {
+async function fetchCBSTableData(tableId: string, selectedFilters: Record<string, string[]>, selectedTopics: string[]): Promise<[any, boolean]> {
 	const dataProperties = await getCBSTableDataProperties(tableId);
 	const dimensionKeys = dataProperties ? dataProperties
 		.filter((p: any) => p["odata.type"] !== "Cbs.OData.Topic" && p["odata.type"] !== "Cbs.OData.TopicGroup")
@@ -264,7 +318,7 @@ async function fetchCBSTableData(tableId: string, selectedFilters: Record<string
         if (!response.ok) throw new Error(`HTTP: ${response.status}`);
         const data = await response.json()as any;
 		console.log(`Succeeded!`)
-        return data.value;
+        return [data.value, false];
     } catch (error) {
         // 2. Retry with top=100 if the first fetch fails
         console.warn("Primary fetch failed, retrying with $top=100...");
@@ -276,11 +330,13 @@ async function fetchCBSTableData(tableId: string, selectedFilters: Record<string
             const retryResponse = await fetch(retryUrl);
             if (!retryResponse.ok) throw new Error(`Retry HTTP: ${retryResponse.status}`);
             const retryData = await retryResponse.json() as any;
-			console.log(`Succeeded!`)
-            return retryData.value;
+
+
+			console.log(`Succeeded after retry!`)
+            return [retryData.value, true];
         } catch (retryError) {
             console.error("Critical failure on retry:", retryError);
-            return [];
+            return [[], true];
         }
     }
 
@@ -295,6 +351,15 @@ async function getHtmlContent(context: vscode.ExtensionContext, fileName: string
     // Convert Uint8Array to string
     return new TextDecoder().decode(fileData);
 };
+
+function getNonce() {
+    let text = '';
+    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    for (let i = 0; i < 32; i++) {
+        text += possible.charAt(Math.floor(Math.random() * possible.length));
+    }
+    return text;
+}
 
 // This method is called when your extension is deactivated
 export function deactivate() {};

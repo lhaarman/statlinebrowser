@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}';">
     <style>
         body { color: var(--vscode-foreground); font-family: var(--vscode-font-family); padding: 10px; }
         .input-group { margin-bottom: 20px; }
@@ -40,16 +40,78 @@
         <label for="table-id">Enter Table ID:</label>
         <input type="text" id="table-id" placeholder="e.g. 83583NED">
         <button id="fetch-properties-btn">Fetch Table Properties</button>  <button id="fetch-table-btn">Fetch Table</button>
+        <button id="browse-catalog-btn" style="background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground);">Browse Table Catalog</button>
+    </div>
+    <div id="catalog-container" style="margin-bottom: 20px; display: none;">
+        <label for="catalog-search" style="font-weight: bold; font-size: 0.9em;">Search Tables:</label>
+        <input type="text" id="catalog-search" placeholder="Type to filter tables...">
+        <select id="catalog-select" size="6" style="width: 100%; margin-top: 5px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); padding: 5px; box-sizing: border-box;"></select>
+        <button id="select-table-btn">Use Selected Table</button>
     </div>
     <div id="filter-container"></div>
-    <div id="data-view"></div>
+    <h2 id="table-title" style="margin-top: 20px;"></h2>
     <div id="status"></div>
-
-    <script>
+    <div id="data-view"></div>
+    <script nonce="{{nonce}}">
         const vscode = acquireVsCodeApi();
+        let allTables = [];
 
         window.addEventListener("DOMContentLoaded", () => {
             vscode.postMessage({ command: "DOMContentLoaded" });
+            // Fetch catalog eagerly in the background
+            vscode.postMessage({ command: "fetchCatalog" });
+        });
+
+        document.getElementById('browse-catalog-btn').addEventListener('click', () => {
+            const container = document.getElementById('catalog-container');
+            const btn = document.getElementById('browse-catalog-btn');
+            if (container.style.display === 'none') {
+                container.style.display = 'block';
+                btn.textContent = 'Close Table Catalog';
+                // If tables aren't loaded yet, show loading status
+                if (allTables.length === 0) {
+                    document.getElementById('status').innerHTML = '<p>Fetching table catalog...</p>';
+                }
+            } else {
+                container.style.display = 'none';
+                btn.textContent = 'Browse Table Catalog';
+            }
+        });
+
+        document.getElementById('catalog-search').addEventListener('input', (e) => {
+            const query = e.target.value.toLowerCase();
+            const select = document.getElementById('catalog-select');
+            select.innerHTML = '';
+            
+            const filtered = allTables.filter(t => 
+                t.Identifier.toLowerCase().includes(query) || 
+                (t.Title && t.Title.toLowerCase().includes(query)) ||
+                (t.ShortDescription && t.ShortDescription.toLowerCase().includes(query))
+            );
+
+            filtered.forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t.Identifier;
+                opt.textContent = `${t.Identifier}: ${t.Title}`;
+                select.appendChild(opt);
+            });
+        });
+
+        document.getElementById('select-table-btn').addEventListener('click', () => {
+            const select = document.getElementById('catalog-select');
+            if (select.value) {
+                const tableId = select.value;
+                document.getElementById('table-id').value = tableId;
+                document.getElementById('catalog-container').style.display = 'none';
+                document.getElementById('browse-catalog-btn').textContent = 'Browse Table Catalog';
+                
+                // Automatically fetch properties/options for the selected table
+                document.getElementById('status').innerHTML = '<p>Fetching properties data...</p>';
+                vscode.postMessage({
+                    command: 'fetchOptions',
+                    tableId: tableId
+                });
+            }
         });
 
         document.getElementById('fetch-properties-btn').addEventListener('click', () => {
@@ -68,10 +130,17 @@
             const tableId = document.getElementById('table-id').value;
             if (tableId) {
                 document.getElementById('status').innerHTML = '<p>Fetching data...</p>';
+                document.getElementById('table-title').textContent = ''; // Clear previous title
+
+                // Try to find the title from our loaded catalog, otherwise fallback to Table ID
+                const matchedTable = allTables.find(t => t.Identifier === tableId);
+                const displayTitle = matchedTable ? `${matchedTable.Title}` : `Table: ${tableId}`;
+                
+                // Store title to display when rendered
+                window.pendingTableTitle = displayTitle;
 
                 const selectedFilters = {};
                 const selectedTopics = [];
-
                 // Find all checked checkboxes inside our filter container
                 const checkedBoxes = document.querySelectorAll("#filter-container input[type='checkbox']:checked");
 
@@ -130,10 +199,23 @@
         window.addEventListener('message', event => {
             const message = event.data;
             if (message.command === 'renderTable') {
-                document.getElementById('status').innerHTML = '';
                 document.getElementById('data-view').innerHTML = message.html;
+                if (window.pendingTableTitle) {
+                    document.getElementById('table-title').textContent = window.pendingTableTitle;
+                }
             } else if (message.command === "setTableId") {
                 document.getElementById("table-id").value = message.value;
+            } else if (message.command === "renderCatalog") {
+                allTables = message.tables || [];
+                document.getElementById('status').innerHTML = '';
+                const select = document.getElementById('catalog-select');
+                select.innerHTML = '';
+                allTables.forEach(t => {
+                    const opt = document.createElement('option');
+                    opt.value = t.Identifier;
+                    opt.textContent = `${t.Identifier}: ${t.Title}`;
+                    select.appendChild(opt);
+                });
             } else if (message.command === "renderFilters") {
                 const container = document.getElementById('filter-container');
                 container.innerHTML = '<h3>Filters</h3>';
@@ -167,6 +249,37 @@
                 
                 container.appendChild(wrapper);
                 document.getElementById('status').innerHTML = '';
+
+                // Always automatically fetch the table data once filters are rendered
+                const tableId = document.getElementById('table-id').value;
+                if (tableId) {
+                    document.getElementById('status').innerHTML = '<p>Fetching data...</p>';
+                    
+                    const selectedFilters = {};
+                    const selectedTopics = [];
+                    const checkedBoxes = document.querySelectorAll("#filter-container input[type='checkbox']:checked");
+
+                    checkedBoxes.forEach(checkbox => {
+                        const name = checkbox.getAttribute("name");
+                        const filterName = name.replace("filter-", "");
+                        
+                        if (filterName === "Topics") {
+                            selectedTopics.push(checkbox.value.split(':')[0]);
+                        } else {
+                            if (!selectedFilters[filterName]) {
+                                selectedFilters[filterName] = [];
+                            }
+                            selectedFilters[filterName].push(checkbox.value.split(':')[0]);
+                        }
+                    });
+
+                    vscode.postMessage({
+                        command: 'fetchTable',
+                        tableId: tableId,
+                        selectedFilters: selectedFilters,
+                        selectedTopics: selectedTopics
+                    });
+                }
             } else if (message.command === "setSelectedFilters") {
                 const savedSelections = message.selectedFilters || {};
                 const savedTopics = message.selectedTopics || [];
@@ -188,6 +301,8 @@
                         checkbox.checked = true;
                     }
                 });
+            } else if (message.command === "updateStatus") {
+                document.getElementById('status').innerHTML = `<p>${message.status}</p>`;
             }
         });
     </script>
